@@ -1,0 +1,3 @@
+[console_scripts]
+extract_visits_and_fritids = ndb_scheduler.commands:extract_visits_and_fritids
+
