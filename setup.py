@@ -13,7 +13,7 @@ setup(name='ndb_scheduler',
       entry_points={
         'console_scripts': [
             'extract_visits_and_fritids=ndb_scheduler.commands:extract_visits_and_fritids',
-
+            'refine_class_list=ndb_scheduler.commands:refine_class_list'
         ],
       },
       zip_safe=False)

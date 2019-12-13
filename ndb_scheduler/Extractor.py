@@ -13,9 +13,10 @@ class Extractor:
         'foreign_key_disabled': 'SET FOREIGN_KEY_CHECKS=0;\n'
     }
 
-    def __init__(self, workbook_file):
+    def __init__(self, workbook_file, verbose):
 
         self.file = workbook_file
+        self.print = verbose
         self.book = xls.load_workbook(filename=workbook_file)
         self.topics = None
         self.values = None
@@ -57,7 +58,7 @@ class Extractor:
                     text += self.pretext['visits']
                     text += f"({self.visit_id}, '{dstring}', {topic_id}, 0, 1);\n"
                     for cell in column:
-                        if not (_v['first_row_staff'] < cell.row < _v['last_row_staff']):
+                        if not (_v['first_row_staff'] <= cell.row <= _v['last_row_staff']):
                             continue
                         if cell.value and self.get_topic_id_from_letter(cell.value) == topic_id:
                             user_acronym = calendar.cell(row=cell.row, column=1).value.lower()
@@ -65,9 +66,12 @@ class Extractor:
                             text += self.pretext['colleagues']
                             text += f"({self.visit_id}, {user_id});\n"
 
-        click.echo(text)
+        if self.print:
+            click.echo(text)
         with open(self.visit_result_file, file_mode) as insert_file:
             insert_file.write(text)
+        click.echo('The results can be found in ' + self.visit_result_file)
+
 
     def extract_fritids_as_sql(self, file_mode="a"):
 
@@ -103,9 +107,11 @@ class Extractor:
                 text += f"({self.visit_id}, {user_id});\n"
                 fritids_groups[cell.value]["nr_visits"] += 1
 
-        click.echo(text)
+        if self.print:
+            click.echo(text)
         with open(self.visit_result_file, file_mode) as insert_file:
             insert_file.write(text)
+        click.echo('The results can be found in ' + self.visit_result_file)
 
     def get_topic_id_from_letter(self, topic_letter):
         topics = self.get_topics()
@@ -196,7 +202,7 @@ class Extractor:
             return self.schools
 
         school_sheet = self.book['skolor']
-        self.schools = {k: v for v, k in school_sheet.iter_rows(min_row=2, values_only=True)}
+        self.schools = {k: v for k, v in school_sheet.iter_rows(min_row=2, values_only=True)}
 
         return self.schools
 
@@ -204,7 +210,7 @@ class Extractor:
         if self.existing_users is not None:
             return self.existing_users
         user_sheet = self.book['existing_users']
-        self.existing_users = {k.strip().lower(): int(v) for v, k in user_sheet.iter_rows(max_col=2, values_only=True)}
+        self.existing_users = {k.strip().lower(): int(v) for k, v in user_sheet.iter_rows(max_col=2, values_only=True)}
 
         return self.existing_users
 
@@ -215,8 +221,8 @@ class Extractor:
         class_sheet = self.book['source']
         rows = [r for r in class_sheet.iter_rows(min_row=2) if str(r[1].value) == str(segment)]
 
-        new_sheet = self.book.create_sheet('step_a')
-        new_sheet.append(['Exclude?', None, None, None, 'Cut', 'Name', None])
+        new_sheet = self.book.create_sheet('step_a_' + str(segment))
+        new_sheet.append(['Exclude?', 'School', None, 'Classname', 'Cut', 'Name', 'Nr_students'])
 
         schools = {}
 
@@ -233,23 +239,26 @@ class Extractor:
                 exclude = 'x'
             else:
                 schools[school_id].append(class_name)
+            if school_id is None:
+                school_id = '_annan_'
             teacher = row[3].value
             cut = None
             if (len(str(teacher).split()) > 3) and (exclude is None):
                 cut = 1
             new_row = [exclude, school_id, segment, class_name, cut, teacher, nr_students]
             new_sheet.append(new_row)
-            print(new_row)
+            if self.print:
+                print(new_row)
 
         self.book.save(self.file)
-        # os.startfile(self.file)
+        click.echo('Now go to sheet ' + 'step_a_' + str(segment))
 
-    def step_b(self):
-        a_sheet = self.book['step_a']
-        b_sheet = self.book.create_sheet('step_b')
+    def step_b(self,  segment=2):
+        a_sheet = self.book['step_a_' + str(segment)]
+        b_sheet = self.book.create_sheet('step_b_' + str(segment))
 
         rows = [r for r in a_sheet.iter_rows(min_row=2) if r[0].value is None]
-        b_sheet.append([None, None, 'Mail', None, None, None, None])
+        b_sheet.append(['Fname', 'Lname', 'Mail', None, None, None, None])
 
         for row in rows:
             row_values = [r.value for r in row]
@@ -263,13 +272,25 @@ class Extractor:
                 first_name = " ".join(first_parts[cut:]).strip()
             new_row = [first_name, last_name, None, school, segment, class_name, nr_students]
             b_sheet.append(new_row)
-            print(new_row)
+            if self.print:
+                print(new_row)
 
         self.book.save(self.file)
-        # os.startfile(self.file)
+        click.echo('Now go to sheet ' + 'step_b_' + str(segment))
 
-    def step_c(self, file_mode='a'):
-        b_sheet = self.book['step_b']
+    def step_c(self, segment):
+        b_sheet = self.book['step_b_' + str(segment)]
+        mails = [r[2].strip().lower()
+                 for r
+                 in b_sheet.iter_rows(min_row=2, values_only=True)
+                 if r[2] is not None
+                 ]
+        text = "\n\nSELECT `Mail`, `id` FROM `users` WHERE `Mail` IN ('" + "', '".join(mails) + "');"
+        click.echo(text)
+
+
+    def step_d(self, segment):
+        b_sheet = self.book['step_b_' + str(segment)]
         rows = b_sheet.iter_rows(min_row=2)
 
         start_year = self.get_value('start_year')
@@ -278,16 +299,16 @@ class Extractor:
         for row in rows:
             row_values = [r.value for r in row]
             fname, lname, mail, school_id, segment, class_name, nr_students = row_values
-            if mail is not None:
-                mail = mail.lower().strip()
+            mail = '' if mail is None else mail
+            mail = mail.lower().strip()
 
-            if mail in self.get_existing_users():
+            if len(mail) > 0 and mail in self.get_existing_users():
                 user_id = self.get_existing_users()[mail]
                 add_user = False
-            elif mail in added_users:
+            elif len(mail) > 0 and mail in added_users:
                 user_id = added_users[mail]
                 add_user = False
-            elif mail is not None:
+            elif len(mail) > 0:
                 self.user_id = 1 + self.get_user_id()
                 user_id = self.user_id
                 add_user = True
@@ -301,16 +322,18 @@ class Extractor:
             self.group_id = 1 + self.get_group_id()
             text += self.pretext['groups']
             text += f"({self.group_id}, '{class_name}', '{segment}', {start_year}, "
-            text += f"{nr_students}, 1, {user_id}, {school_id});\n"
+            text += f"{nr_students}, 1, {user_id}, '{school_id}');\n"
             if add_user:
                 fname = 'NULL' if fname is None else fname
                 lname = 'NULL' if lname is None else lname
                 text += self.pretext['users']
                 text += f"({user_id}, '{fname}', '{lname}', '{mail}', '{school_id}', 4, 1, 6);\n"
 
-        print(text)
-        with open(self.group_result_file, file_mode) as insert_file:
+        if self.print:
+            print(text)
+        with open(self.group_result_file, 'w') as insert_file:
             insert_file.write(text)
+        click.echo('The results can be found in ' + self.group_result_file)
 
 
 if __name__ == '__main__':
@@ -319,4 +342,4 @@ if __name__ == '__main__':
     # file = '/mnt/d/Sigtuna kommun/Intern - Dokument/Administration/klasslistor_läsårsdata/data_från_IST_analys/test' \
     #       '/klasslista_ak5.xlsx'
     ex = Extractor(file)
-    ex.step_b()
+    ex.extract_visits_as_sql()
